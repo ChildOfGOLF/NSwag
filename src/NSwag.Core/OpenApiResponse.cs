@@ -1,11 +1,3 @@
-﻿//-----------------------------------------------------------------------
-// <copyright file="SwaggerResponse.cs" company="NSwag">
-//     Copyright (c) Rico Suter. All rights reserved.
-// </copyright>
-// <license>https://github.com/RicoSuter/NSwag/blob/master/LICENSE.md</license>
-// <author>Rico Suter, mail@rsuter.com</author>
-//-----------------------------------------------------------------------
-
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using NJsonSchema;
@@ -16,59 +8,62 @@ namespace NSwag
     /// <summary>The Swagger response.</summary>
     public class OpenApiResponse : JsonReferenceBase<OpenApiResponse>, IJsonReference
     {
-        // (RegexOptions) 0x0008 = Compiled
-        private static readonly Regex AppJsonRegex = new Regex(@"application\/(\S+?)?\+?json;?(\S+)?", (RegexOptions)0x0008);
+        private static readonly Regex AppJsonRegex = new Regex(@"application\/(\S+?)?\+?json;?(\S+)?", RegexOptions.Compiled);
 
-        /// <summary>Gets or sets the extension data (i.e. additional properties which are not directly defined by the JSON object).</summary>
         [JsonExtensionData]
         public IDictionary<string, object> ExtensionData { get; set; }
 
-        /// <summary>Gets the parent <see cref="OpenApiOperation"/>.</summary>
         [JsonIgnore]
         public object Parent { get; internal set; }
 
-        /// <summary>Gets the actual response, either this or the referenced response.</summary>
         [JsonIgnore]
         public OpenApiResponse ActualResponse => Reference ?? this;
 
-        /// <summary>Gets or sets the response's description.</summary>
         [JsonProperty(PropertyName = "description", Order = 1)]
         public string Description { get; set; } = "";
 
-        /// <summary>Gets or sets the headers.</summary>
         [JsonProperty(PropertyName = "headers", Order = 3, DefaultValueHandling = DefaultValueHandling.Ignore)]
         public OpenApiHeaders Headers { get; } = [];
 
-        /// <summary>Sets a value indicating whether the response can be null (use IsNullable() to get a parameter's nullability).</summary>
-        /// <remarks>The Swagger spec does not support null in schemas, see https://github.com/OAI/OpenAPI-Specification/issues/229 </remarks>
         [JsonProperty(PropertyName = "x-nullable", DefaultValueHandling = DefaultValueHandling.IgnoreAndPopulate)]
         public bool? IsNullableRaw { internal get; set; }
 
-        /// <summary>Gets or sets the expected child schemas of the base schema (can be used for generating enhanced typings/documentation).</summary>
         [JsonProperty(PropertyName = "x-expectedSchemas", Order = 7, DefaultValueHandling = DefaultValueHandling.IgnoreAndPopulate)]
         public ICollection<JsonExpectedSchema> ExpectedSchemas { get; set; }
 
-        /// <summary>Gets or sets the descriptions of potential response payloads (OpenApi only).</summary>
         [JsonProperty(PropertyName = "content", Order = 4, DefaultValueHandling = DefaultValueHandling.Ignore)]
         public IDictionary<string, OpenApiMediaType> Content { get; } = new Dictionary<string, OpenApiMediaType>();
 
-        /// <summary>Gets or sets the links that can be followed from the response (OpenApi only).</summary>
         [JsonProperty(PropertyName = "links", Order = 5, DefaultValueHandling = DefaultValueHandling.Ignore)]
         public IDictionary<string, OpenApiLink> Links { get; } = new Dictionary<string, OpenApiLink>();
 
-        /// <summary>Gets or sets the response schema (Swagger only).</summary>
         [JsonProperty(PropertyName = "schema", Order = 2, DefaultValueHandling = DefaultValueHandling.Ignore)]
         public JsonSchema Schema
         {
-            get => Content.FirstOrDefault(c => c.Value.Schema != null).Value?.Schema;
+            get
+            {
+                foreach (var item in Content)
+                {
+                    if (item.Value?.Schema != null)
+                        return item.Value.Schema;
+                }
+                return null;
+            }
             set => UpdateContent(value, Examples);
         }
 
-        /// <summary>Gets or sets the headers (Swagger only).</summary>
         [JsonProperty(PropertyName = "examples", Order = 6, DefaultValueHandling = DefaultValueHandling.Ignore)]
         public object Examples
         {
-            get => Content.FirstOrDefault(c => c.Value.Example != null).Value?.Example;
+            get
+            {
+                foreach (var item in Content)
+                {
+                    if (item.Value?.Example != null)
+                        return item.Value.Example;
+                }
+                return null;
+            }
             set => UpdateContent(Schema, value);
         }
 
@@ -76,60 +71,49 @@ namespace NSwag
         {
             Content.Clear();
 
-            if (schema != null || example != null)
+            if (schema == null && example == null)
+                return;
+
+            var mimeType = schema?.IsBinary == true ? "application/octet-stream" : "application/json";
+            Content[mimeType] = new OpenApiMediaType
             {
-                var mimeType = schema?.IsBinary == true ? "application/octet-stream" : "application/json";
-                Content[mimeType] = new OpenApiMediaType
-                {
-                    Schema = schema,
-                    Example = example
-                };
-            }
+                Schema = schema,
+                Example = example
+            };
         }
 
-        /// <summary>Determines whether the specified null handling is nullable (fallback value: false).</summary>
-        /// <param name="schemaType">The schema type.</param>
-        /// <returns>The result.</returns>
         public bool IsNullable(SchemaType schemaType)
         {
             return IsNullable(schemaType, false);
         }
 
-        /// <summary>Determines whether the specified null handling is nullable.</summary>
-        /// <param name="schemaType">The schema type.</param>
-        /// <param name="fallbackValue">The fallback value when 'x-nullable' is not defined.</param>
-        /// <returns>The result.</returns>
         public bool IsNullable(SchemaType schemaType, bool fallbackValue)
         {
             if (schemaType == SchemaType.Swagger2)
-            {
-                if (IsNullableRaw == null)
-                {
-                    return fallbackValue;
-                }
-
-                return IsNullableRaw.Value;
-            }
+                return IsNullableRaw ?? fallbackValue;
 
             return ActualResponse.Schema?.IsNullable(schemaType) ?? false;
         }
 
-        /// <summary>Checks whether this is a binary/file response.</summary>
-        /// <param name="operation">The operation the response belongs to.</param>
-        /// <returns>The result.</returns>
         public bool IsBinary(OpenApiOperation operation)
         {
-            static bool ProducesBinary(ICollection<string> contentTypeKeys)
+            static bool ProducesBinary(IEnumerable<string> contentTypes)
             {
-                foreach (var p in contentTypeKeys)
+                foreach (var p in contentTypes)
                 {
-                    if (p.Contains("application/json") || p.Contains("text/plain") || AppJsonRegex.IsMatch(p))
+                    if (p.Contains("application/json", StringComparison.OrdinalIgnoreCase) ||
+                        p.Contains("text/plain", StringComparison.OrdinalIgnoreCase) ||
+                        AppJsonRegex.IsMatch(p))
                     {
                         return false;
                     }
                 }
-
                 return true;
+            }
+
+            static bool IsAllBinarySchemas(IDictionary<string, OpenApiMediaType> content)
+            {
+                return content.All(c => c.Value?.Schema?.ActualSchema?.IsBinary == true);
             }
 
             foreach (var r in operation.Responses)
@@ -138,48 +122,37 @@ namespace NSwag
                 var actualResponse = r.Value.ActualResponse;
 
                 if (actualResponse != this || key == "204")
-                {
                     continue;
-                }
 
                 if (ActualResponse.Content.Count > 0)
                 {
-                    if (ActualResponse.Content.All(static c => c.Value.Schema?.ActualSchema.IsBinary == true))
-                    {
+                    if (IsAllBinarySchemas(ActualResponse.Content))
                         return true;
-                    }
 
                     var contentIsBinary =
-                        ActualResponse.Content.All(static c =>
+                        ActualResponse.Content.All(c =>
                         {
-                            var actualSchema = c.Value.Schema?.ActualSchema;
+                            var actualSchema = c.Value?.Schema?.ActualSchema;
                             return actualSchema?.IsAnyType != false || actualSchema?.IsBinary != false;
-                        })
-                        && ProducesBinary(ActualResponse.Content.Keys);
+                        }) &&
+                        ProducesBinary(ActualResponse.Content.Keys);
 
                     if (contentIsBinary)
-                    {
                         return true;
-                    }
                 }
 
                 var actualProduces = (ActualResponse.Parent as OpenApiOperation)?.ActualProduces;
                 if (actualProduces?.Count > 0)
                 {
                     if (Schema?.ActualSchema.IsBinary == true)
-                    {
                         return true;
-                    }
 
-                    // is binary only if there is no JSON schema defined
                     var producesIsBinary =
-                        (Schema?.ActualSchema.IsAnyType != false || Schema?.ActualSchema.IsBinary != false)
-                        && ProducesBinary(actualProduces);
+                        (Schema?.ActualSchema.IsAnyType != false || Schema?.ActualSchema.IsBinary != false) &&
+                        ProducesBinary(actualProduces);
 
                     if (producesIsBinary)
-                    {
                         return true;
-                    }
                 }
 
                 break;
@@ -188,9 +161,6 @@ namespace NSwag
             return false;
         }
 
-        /// <summary>Checks whether this is an empty response.</summary>
-        /// <param name="operation">The operation the response belongs to.</param>
-        /// <returns>The result.</returns>
         public bool IsEmpty(OpenApiOperation operation)
         {
             return ActualResponse.Content.Count == 0 &&
